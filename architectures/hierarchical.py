@@ -22,21 +22,18 @@ gerente del dominio y escala bien cuando se agregan mas especialistas
 (basta colgar un agente nuevo del gerente que corresponda).
 Desventajas: mas saltos = mas latencia y mas tokens.
 
-Uso:
-    python -m architectures.hierarchical --demo
+Las herramientas de los agentes vienen del servidor MCP (`mcp_server.py`) y
+el sistema completo se expone como un solo agente A2A (`a2a_server.py`).
 """
 
 from __future__ import annotations
 
-import sys
-
 from agents import Agent
+from agents.mcp import MCPServer
 
-from core import prompts
-from core.cli import run_cli
+from core import mcp_client, prompts
 from core.config import DEFAULT_MODEL
 from core.specialists import make_faq_agent, make_scheduling_agent, make_weather_agent
-from core.tools import fecha_de_hoy
 
 DESCRIPCION = (
     "Director -> Gerentes de area (Informacion y Operaciones de Vuelo) -> Especialistas.\n"
@@ -105,13 +102,13 @@ Como diriges:
 """.strip()
 
 
-def build_agent() -> Agent:
+def build_agent(servidor_mcp: MCPServer) -> Agent:
     """Arma el grafo de la arquitectura jerarquica (3 niveles)."""
 
     # --- Nivel 3: especialistas operativos ---
-    agente_faq = make_faq_agent()
-    agente_clima = make_weather_agent()
-    agente_agenda = make_scheduling_agent()
+    agente_faq = make_faq_agent(servidor_mcp)
+    agente_clima = make_weather_agent(servidor_mcp)
+    agente_agenda = make_scheduling_agent(servidor_mcp)
 
     # --- Nivel 2: gerentes de area ---
     gerente_informacion = Agent(
@@ -126,12 +123,13 @@ def build_agent() -> Agent:
         ],
     )
 
+    mcp_client.permitir("Gerente de Operaciones de Vuelo", ["fecha_de_hoy"])
     gerente_operaciones = Agent(
         name="Gerente de Operaciones de Vuelo",
         instructions=INSTRUCCIONES_GERENTE_OPS,
         model=DEFAULT_MODEL,
+        mcp_servers=[servidor_mcp],
         tools=[
-            fecha_de_hoy,
             agente_clima.as_tool(
                 tool_name="agente_clima",
                 tool_description=(
@@ -150,12 +148,13 @@ def build_agent() -> Agent:
     )
 
     # --- Nivel 1: direccion ---
+    mcp_client.permitir("Director de Servicio", ["fecha_de_hoy"])
     return Agent(
         name="Director de Servicio",
         instructions=INSTRUCCIONES_DIRECTOR,
         model=DEFAULT_MODEL,
+        mcp_servers=[servidor_mcp],
         tools=[
-            fecha_de_hoy,
             gerente_informacion.as_tool(
                 tool_name="gerencia_informacion",
                 tool_description=(
@@ -172,11 +171,3 @@ def build_agent() -> Agent:
             ),
         ],
     )
-
-
-def main() -> int:
-    return run_cli(build_agent(), "Jerarquica", DESCRIPCION)
-
-
-if __name__ == "__main__":
-    sys.exit(main())

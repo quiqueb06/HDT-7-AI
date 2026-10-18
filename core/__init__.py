@@ -16,4 +16,5 @@ __all__ = [
     "prompts",
     "specialists",
     "cli",
+    "mcp_client",
 ]
