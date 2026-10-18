@@ -1,7 +1,11 @@
 # Requerimientos del proyecto
 openai-agents>=0.2.0      # SDK de agentes (as_tool / handoffs)
 tzdata                    # zona horaria America/Guatemala en Windows
-python-dotenv             # carga el .env en el provider de promptfoo
+python-dotenv             # carga el .env
+mcp>=2.0                  # servidor MCP (Streamable HTTP)
+a2a-sdk[http-server]>=1.0 # servidor y cliente A2A
+uvicorn                   # servidor ASGI para A2A
+httpx                     # cliente HTTP del cliente A2A
 
 # Utilidades de documentacion y pruebas
 reportlab>=4.0            # genera docs/respuestas.pdf desde el Markdown
