@@ -1,104 +1,87 @@
-# Hoja de trabajo #6 - Evals (CC3116)
+# Hoja de trabajo #7 - Protocolos Agenticos (CC3116)
 
 **Universidad del Valle de Guatemala**  
 AI ENGINEERING CREATIVITY - Cuarto Semestre  
 Quique Bran - Carnet 25302
 
-Evals con [promptfoo](https://www.promptfoo.dev/) del asistente multiagente de la hoja #5,
-usando la arquitectura **jerarquica** (la arquitectura objetivo segun
-[`docs/respuestas.md`](docs/respuestas.md)). El codigo de la hoja #5 se mantiene igual y se
-documenta mas abajo.
+El sistema multiagente de Parachute S.A. (arquitectura **jerarquica** de la hoja #5) ahora usa
+los dos protocolos agenticos:
 
-## Que se evalua
+- **MCP:** todas las herramientas de los agentes (FAQs, clima y agenda) viven en un solo
+  servidor MCP con transporte **Streamable HTTP**. Los agentes son clientes MCP.
+- **A2A:** el sistema multiagente completo se expone como **un solo agente A2A** con tres
+  skills. La aplicacion de terminal es un cliente A2A.
 
-`promptfooconfig.yaml` tiene 8 casos: 4 de preguntas frecuentes y 4 de agenda de citas. Cada
-caso combina los cuatro tipos de eval que pide la hoja:
+```
+Terminal (cliente A2A)  --A2A/JSON-RPC-->  a2a_server.py (Agente "Asistente de Parachute S.A.")
+                                              |  Director -> Gerentes -> Especialistas
+                                              v
+                                           mcp_server.py (herramientas, Streamable HTTP)
+                                              |  FAQs / Open-Meteo / agenda
+```
 
-| Tipo | Assertion de promptfoo | Que verifica |
-|---|---|---|
-| Factuality | `factuality` | La respuesta coincide con el dato de referencia (precio, requisitos, horarios, cita confirmada, rechazo por clima, ventana de 16 dias). |
-| Deterministico | `contains`, `contains-all`, `icontains`, `regex`, `not-regex` | Montos (`Q2,200`), horarios, codigo de cita `PCH-XXXXXX`, mencion de los 16 dias, que no se emita un codigo cuando no se agenda. |
-| Latencia | `latency` | 30 s para FAQ y 5 min para agenda (ver nota de Groq). |
-| Ejecucion de herramientas | `javascript` | Que se llamo `buscar_en_faqs`; que `evaluar_condiciones_de_salto` se llamo con la fecha correcta **antes** de `agendar_cita`; que `agendar_cita` recibio fecha, hora y cliente correctos; que no se agenda en dias inseguros ni fuera de la ventana. |
+## Componentes
 
-Casos:
+| Archivo | Que hace |
+|---|---|
+| `mcp_server.py` | Levanta el servidor MCP en `http://127.0.0.1:8001/mcp` (Streamable HTTP). |
+| `core/tools.py` | Las 9 herramientas registradas en el servidor MCP. Cada ejecucion deja un log con el nombre, los argumentos, si devolvio `ok` y cuanto tardo. |
+| `core/mcp_client.py` | Conexion de los agentes al servidor MCP (`MCPServerStreamableHttp` del SDK de OpenAI Agents) con un filtro para que cada agente vea solo las herramientas de su especialidad. |
+| `architectures/hierarchical.py` | Grafo de agentes (Director, gerentes y especialistas), ahora con `mcp_servers` en lugar de herramientas locales. |
+| `a2a_server.py` | Servidor A2A que envuelve el sistema multiagente: Agent Card con las skills `preguntas_frecuentes`, `clima_para_saltar` y `agenda_de_citas`, y un `AgentExecutor` que corre al Director por cada mensaje. Loguea cada consulta, su duracion y la respuesta. Mantiene la memoria de la conversacion por `context_id`. |
+| `core/cli.py` | Interfaz de terminal convertida en cliente A2A: lee la Agent Card, muestra las skills y envia cada consulta con el mismo `context_id`. |
 
-- FAQ: precio del salto tandem, requisitos de edad y peso, horarios, y una pregunta que no
-  esta en la base (venta de comida).
-- Agenda: cita en un dia con clima ideal, intento en un dia con lluvia, fecha fuera de los 16
-  dias de pronostico y consulta de clima sin agendar.
+Las arquitecturas centralizada y descentralizada y los evals de la hoja #6 se quitaron de este
+repositorio porque usaban las herramientas locales; siguen en los repositorios de esas hojas.
 
-## Como funciona
-
-- `evals/provider.py`: provider de Python para promptfoo. Arma el agente de
-  `architectures/hierarchical.py`, corre la consulta y devuelve la respuesta junto con las
-  herramientas de `core/tools.py` que se ejecutaron (`metadata.herramientas`: nombre,
-  argumentos y si devolvieron `ok`). Las assertions `javascript` leen esa lista.
-- Para que los resultados sean reproducibles, el provider usa el clima simulado
-  (`PARACHUTE_WEATHER_MODE=mock`) y una agenda vacia en cada consulta.
-- `evals/fechas.py`: calcula las fechas de los casos de agenda (la primera fecha con clima
-  IDEAL y la primera con lluvia dentro de los 16 dias, y una fecha a 30 dias), asi los casos
-  no dependen del dia en que se corren.
-
-### Nota sobre Groq
-
-Los agentes y el grader corren en el tier gratuito de [Groq](https://console.groq.com/keys)
-(`openai/gpt-oss-20b` para los agentes, definido en `PARACHUTE_MODEL`, y `qwen/qwen3.8-27b`
-para calificar factuality). El provider apunta el SDK de agentes a Groq con un `RunConfig`,
-sin cambiar el codigo de la hoja #5.
-
-El tier gratuito limita a 8,000 tokens por minuto y 200,000 tokens por dia por modelo, y el
-flujo de agenda pasa por tres niveles de agentes. Por eso esas consultas tardan minutos y los
-casos se corren uno por uno con una pausa de 30 s.
-
-## Resultados
-
-El reporte entregado ([`evals/reporte.html`](evals/reporte.html)) se genero con
-`openai/gpt-oss-120b` para los agentes y `openai/gpt-oss-20b` como grader:
-
-- **3 casos pasaron** todas sus assertions (factuality, deterministicas, herramientas y
-  latencia de 3 a 16 s): precio, requisitos de edad y peso, y horarios.
-- **5 casos quedaron en ERROR** (la pregunta fuera de la base y los 4 de agenda): no llegaron
-  a evaluarse porque se agoto la cuota diaria gratuita de Groq para `openai/gpt-oss-120b`
-  (200,000 tokens) a mitad de la corrida. No son fallas del agente.
-
-Despues se cambio la configuracion a `openai/gpt-oss-20b` (agentes) y `qwen/qwen3.8-27b`
-(grader), que es la que queda en el repositorio, para poder reintentar los casos con
-`npx promptfoo@latest retry <evalId> -c promptfooconfig.yaml`. Ese reintento no se incluyo en
-el reporte entregado.
-
-## Correr los evals
-
-Requiere Node.js 20 o superior.
+## Instalacion
 
 ```
 python -m venv .venv
-.venv\Scripts\activate
+.venv\Scriptsctivate
 pip install -r requirements.txt
 ```
 
-Crear un `.env` con:
+Crear un `.env` (ver `.env.example`) con la llave gratuita de [Groq](https://console.groq.com/keys):
 
 ```
 GROQ_API_KEY=...
 BASE_URL=https://api.groq.com/openai/v1
 PARACHUTE_MODEL=openai/gpt-oss-20b
-PROMPTFOO_PYTHON=C:\ruta\al\repo\.venv\Scripts\python.exe
 ```
 
-`PROMPTFOO_PYTHON` (ruta absoluta) hace que promptfoo use el Python del entorno virtual.
+## Ejecucion
 
-Y correr:
+En tres terminales, en este orden:
 
 ```
-npx promptfoo@latest eval -c promptfooconfig.yaml --env-file .env --no-cache -j 1 -o evals/reporte.html -o evals/reporte.json
+python mcp_server.py
 ```
 
-`--no-cache` es necesario para que promptfoo mida la latencia. El reporte queda en
-[`evals/reporte.html`](evals/reporte.html) (y en JSON en `evals/reporte.json`); tambien se
-puede ver con `npx promptfoo@latest view`.
+```
+python a2a_server.py
+```
+
+```
+python -m core.cli
+```
+
+El servidor MCP muestra un log por cada herramienta ejecutada y el servidor A2A uno por cada
+consulta recibida y respondida. Para salir del cliente se escribe `salir` o se presiona Ctrl-C.
+
+Con `PARACHUTE_WEATHER_MODE=mock` en el `.env` el servidor MCP usa clima simulado en lugar de
+Open-Meteo (util para mostrar una cita confirmada aunque el pronostico real sea de lluvia).
+
+### Nota sobre Groq
+
+Los agentes corren en el tier gratuito de Groq. El servidor A2A apunta el SDK de agentes a Groq
+con un `RunConfig`. El tier gratuito limita los tokens por minuto y por dia, y una consulta de
+agenda pasa por tres niveles de agentes, asi que puede tardar uno o dos minutos.
 
 ---
+
+> Lo que sigue es la documentacion original de la hoja #5. Las instrucciones de ejecucion de
+> esa seccion ya no aplican: ahora el sistema se corre con los servidores MCP y A2A de arriba.
 
 # Hoja de trabajo #5 - Orquestacion de sistemas multiagentes (CC3116)
 
