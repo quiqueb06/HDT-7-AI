@@ -1,10 +1,9 @@
-"""Capa de herramientas (function tools) compartida por las 3 arquitecturas.
+"""Herramientas de Parachute S.A. expuestas en un solo servidor MCP.
 
-Esta es la pieza clave de la abstraccion pedida por Parachute S.A.: la logica
-de integracion (Open-Meteo, reglas de seguridad, FAQs y agenda) se expone una
-sola vez como herramientas del SDK de OpenAI Agents. Las arquitecturas
-centralizada, jerarquica y descentralizada consumen exactamente estas mismas
-herramientas; lo unico que cambia entre ellas es COMO se organizan los agentes.
+La logica de integracion (Open-Meteo, reglas de seguridad, FAQs y agenda) se
+registra aqui como herramientas del servidor MCP `mcp` (lo levanta
+`mcp_server.py` con transporte Streamable HTTP). Los agentes ya no reciben
+estas funciones directamente: las consumen como cliente MCP.
 
 Convenciones:
   * Toda herramienta devuelve un dict serializable.
@@ -15,13 +14,44 @@ Convenciones:
 
 from __future__ import annotations
 
+import functools
+import json
+import logging
+import time
 from datetime import timedelta
 from typing import Any, Dict, List
 
-from agents import function_tool
+from mcp.server.mcpserver import MCPServer
 
 from . import config, faq, scheduling, weather
 from .rules import Status, evaluate_conditions
+
+logger = logging.getLogger("parachute.mcp")
+
+mcp = MCPServer(
+    name="Parachute S.A.",
+    instructions="Herramientas de FAQs, clima (Open-Meteo) y agenda de citas de Parachute S.A.",
+)
+
+
+def herramienta(fn):
+    """Registra la funcion como herramienta del servidor MCP y loguea cada ejecucion."""
+
+    @functools.wraps(fn)
+    def envoltura(**kwargs):
+        inicio = time.perf_counter()
+        resultado = fn(**kwargs)
+        logger.info(
+            "herramienta=%s argumentos=%s ok=%s (%.0f ms)",
+            fn.__name__,
+            json.dumps(kwargs, ensure_ascii=False),
+            resultado.get("ok"),
+            (time.perf_counter() - inicio) * 1000,
+        )
+        return resultado
+
+    mcp.tool()(envoltura)
+    return fn
 
 
 def _error(mensaje: str, **extra: Any) -> Dict[str, Any]:
@@ -30,7 +60,7 @@ def _error(mensaje: str, **extra: Any) -> Dict[str, Any]:
 
 # --- Herramientas de contexto temporal ---------------------------------------
 
-@function_tool
+@herramienta
 def fecha_de_hoy() -> Dict[str, Any]:
     """Devuelve la fecha de hoy y la ultima fecha con pronostico disponible.
 
@@ -52,7 +82,7 @@ def fecha_de_hoy() -> Dict[str, Any]:
 
 # --- Herramientas de base de conocimientos (FAQs) -----------------------------
 
-@function_tool
+@herramienta
 def buscar_en_faqs(consulta: str) -> Dict[str, Any]:
     """Busca en la base de conocimientos de FAQs de Parachute S.A.
 
@@ -76,7 +106,7 @@ def buscar_en_faqs(consulta: str) -> Dict[str, Any]:
     }
 
 
-@function_tool
+@herramienta
 def listar_temas_faq() -> Dict[str, Any]:
     """Lista las categorias y preguntas registradas en la base de conocimientos."""
 
@@ -85,7 +115,7 @@ def listar_temas_faq() -> Dict[str, Any]:
 
 # --- Herramientas de clima (Open-Meteo) ---------------------------------------
 
-@function_tool
+@herramienta
 def consultar_clima(fecha: str) -> Dict[str, Any]:
     """Consulta Open-Meteo para la zona de aterrizaje y devuelve las variables crudas.
 
@@ -107,7 +137,7 @@ def consultar_clima(fecha: str) -> Dict[str, Any]:
     return {"ok": True, "ubicacion": config.LANDING_ZONE.name, "clima": snapshot.to_dict()}
 
 
-@function_tool
+@herramienta
 def evaluar_condiciones_de_salto(fecha: str) -> Dict[str, Any]:
     """Consulta el clima de una fecha y aplica los criterios de seguridad de Parachute S.A.
 
@@ -144,7 +174,7 @@ def evaluar_condiciones_de_salto(fecha: str) -> Dict[str, Any]:
 
 # --- Herramientas de agenda ---------------------------------------------------
 
-@function_tool
+@herramienta
 def consultar_disponibilidad(fecha: str) -> Dict[str, Any]:
     """Muestra los horarios con cupo disponible para una fecha.
 
@@ -160,7 +190,7 @@ def consultar_disponibilidad(fecha: str) -> Dict[str, Any]:
         return _error(str(exc))
 
 
-@function_tool
+@herramienta
 def agendar_cita(
     cliente: str,
     contacto: str,
@@ -231,7 +261,7 @@ def agendar_cita(
     }
 
 
-@function_tool
+@herramienta
 def listar_citas(cliente: str = "", fecha: str = "") -> Dict[str, Any]:
     """Lista las citas agendadas, filtrando por cliente y/o fecha si se indican.
 
@@ -244,7 +274,7 @@ def listar_citas(cliente: str = "", fecha: str = "") -> Dict[str, Any]:
     return {"ok": True, "total": len(citas), "citas": citas}
 
 
-@function_tool
+@herramienta
 def cancelar_cita(codigo: str) -> Dict[str, Any]:
     """Cancela una cita existente usando su codigo (por ejemplo PCH-1A2B3C).
 
@@ -259,27 +289,16 @@ def cancelar_cita(codigo: str) -> Dict[str, Any]:
 
 
 # --- Catalogo de herramientas por especialidad --------------------------------
-# Las arquitecturas se arman a partir de estos grupos; agregar un requerimiento
-# funcional nuevo (Parachute S.A. ya aviso que vendran mas) solo implica
-# agregar una herramienta a la lista correspondiente.
+# Nombres de las herramientas del servidor MCP que puede ver cada especialista.
+# Agregar un requerimiento funcional nuevo solo implica registrar la
+# herramienta arriba y agregar su nombre a la lista correspondiente.
 
-FAQ_TOOLS: List[Any] = [buscar_en_faqs, listar_temas_faq]
-WEATHER_TOOLS: List[Any] = [fecha_de_hoy, consultar_clima, evaluar_condiciones_de_salto]
-SCHEDULING_TOOLS: List[Any] = [
-    fecha_de_hoy,
-    consultar_disponibilidad,
-    agendar_cita,
-    listar_citas,
-    cancelar_cita,
-]
-ALL_TOOLS: List[Any] = [
-    fecha_de_hoy,
-    buscar_en_faqs,
-    listar_temas_faq,
-    consultar_clima,
-    evaluar_condiciones_de_salto,
-    consultar_disponibilidad,
-    agendar_cita,
-    listar_citas,
-    cancelar_cita,
+FAQ_TOOLS: List[str] = ["buscar_en_faqs", "listar_temas_faq"]
+WEATHER_TOOLS: List[str] = ["fecha_de_hoy", "consultar_clima", "evaluar_condiciones_de_salto"]
+SCHEDULING_TOOLS: List[str] = [
+    "fecha_de_hoy",
+    "consultar_disponibilidad",
+    "agendar_cita",
+    "listar_citas",
+    "cancelar_cita",
 ]
