@@ -34,6 +34,13 @@ Terminal (cliente A2A)  --A2A/JSON-RPC-->  a2a_server.py (Agente "Asistente de P
 Las arquitecturas centralizada y descentralizada y los evals de la hoja #6 se quitaron de este
 repositorio porque usaban las herramientas locales; siguen en los repositorios de esas hojas.
 
+## Video
+
+[`docs/video_demo_hdt7.mp4`](docs/video_demo_hdt7.mp4): el servidor MCP con un log por cada
+herramienta ejecutada, el servidor A2A con sus logs y la terminal interactuando con el agente
+por A2A (pregunta frecuente y cita agendada). Se grabo con `qwen/qwen3.8-27b` en Groq y con el
+clima simulado (`PARACHUTE_WEATHER_MODE=mock`).
+
 ## Instalacion
 
 ```
